@@ -10,8 +10,6 @@ tags:
 - zen6-coder
 - agentic-coding
 - moe
-- qwen3.8-flash-next
-- unsloth
 - halogen
 - strix-halo
 - mtp
@@ -22,9 +20,9 @@ base_model:
 
 <div align="center">
 
-# Zen6 Coder: 180B Frontier Agentic MoE
+# Zen6 Coder
 
-**125B Base (6B Active) | 51B N-Gram Embedding | 4B MTP Drafter | 62.5 SWE-bench Pro**
+**Agentic coding on your own machine. 180B parameters, 6B active per token.**
 
 [![Hugging Face](https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-zenlm%2Fzen6--coder-blue)](https://huggingface.co/zenlm/zen6-coder)
 [![GitHub](https://img.shields.io/badge/GitHub-zenlm%2Fzen6--coder-black)](https://github.com/zenlm/zen6-coder)
@@ -33,96 +31,115 @@ base_model:
 
 ---
 
-## Architectural Highlights
+## Overview
 
-**Zen6 Coder** is built on the next-generation **Qwen3.8-Flash-Next** architecture, representing a fundamental redesign of modern agentic language models:
+Zen6 Coder is Zen 6 for agentic coding, from Hanzo AI (Zen LM). It is built to
+run locally: only 6B parameters are active per token, the 4-bit build is
+93.7 GB and fits a 128 GB unified-memory machine such as AMD Strix Halo, it
+reads 262,144 tokens natively, it calls tools, and its own MTP head drafts
+tokens ahead for faster decoding.
 
-- **180 Billion Total Parameters**:
-  - **125B Base Language Model** with only **6B Activated Parameters** per token (10 routed experts + 1 shared expert out of 512 total experts).
-  - **51B N-Gram Embedding Table** (20,000,000 bigrams/trigrams injected at layer 2) enabling ultra-dense lexical memory without compute overhead.
-  - **4B Multi-Token Prediction (MTP) Head** (1 dedicated layer trained with multi-step prediction) delivering 1.3x–1.7x speculative acceleration out of the box.
-- **Hybrid Attention with QSA (Qwen Sparse Attention)**:
-  - 48 Layers arranged as $12 \times [3 \times (\text{Gated DeltaNet} \to \text{MoE}) \to 1 \times (\text{QSA} \to \text{MoE})]$.
-  - **Gated DeltaNet**: 48 linear attention heads for V, 16 heads for QK (head dim 128) handling constant-memory linear sequence progression.
-  - **QSA**: 24 Query heads, 2 KV heads (head dim 256, RoPE dim 64) with an MQA Indexer (4 Query / 1 Shared Key, budget 512 micro-blocks / 2048 tokens).
-- **Gated Residuals**: 4 residual branches modulated by data-dependent read and write gates with bottleneck rank 320.
-- **Context Length**: 262,144 tokens native, extensible to 1,000,000 tokens via YaRN (`rope_theta: 10000000, factor: 4.0`).
+It is also on the Hanzo API as `zen6-coder`.
 
----
+## Specifications
 
-## State-of-the-Art Coding & Agent Benchmarks
+| | |
+| :--- | :--- |
+| **Architecture** | GGUF `general.architecture`: `qwen4exp`. config.json `model_type`: `qwen4_exp`, `architectures`: `Qwen4ExpForConditionalGeneration`. hanzo-engine reads it as `zen6`. |
+| **Parameters** | 180B total: 125B MoE language model, 51B n-gram embedding, 4B MTP head |
+| **Active per token** | 6B (10 routed experts + 1 shared expert, of 512) |
+| **Layers** | 48, as 12 × [3 × (Gated DeltaNet → MoE) → 1 × (sparse attention → MoE)] |
+| **Context** | 262,144 tokens native; 1,048,576 with YaRN (`rope_theta: 10000000`, `factor: 4.0`) |
 
-Zen6 Coder establishes new state-of-the-art benchmarks in real-world software engineering and agentic coding:
+## Design
 
-| Benchmark | Zen6 Coder (Qwen3.8-Flash-Next) | Claude-Opus-4.6 (Max) | DeepSeek-V4-Flash-0731 | Qwen3.8-27B |
+- **N-gram embedding.** A 51B table of 20,000,000 bigrams and trigrams,
+  injected at layer 2. It is looked up, not computed, so it adds lexical
+  memory without adding compute per token.
+- **MTP head.** One dedicated layer (4B) trained for multi-step prediction.
+  It drafts tokens the model verifies in one pass, for 1.3x–1.7x faster decoding
+  at low concurrency.
+- **Gated DeltaNet.** Linear attention with 48 value heads and 16 query/key
+  heads (head dim 128); memory stays constant as the sequence grows.
+- **Sparse attention.** 24 query heads, 2 KV heads (head dim 256, RoPE dim 64).
+  An MQA indexer (4 query heads, 1 shared key) picks 512 blocks, 2,048 tokens,
+  for each query.
+- **Gated residuals.** 4 residual branches with data-dependent read and write
+  gates, bottleneck rank 320.
+- **Reasoning control.** The chat template takes `reasoning_effort` (`xhigh`
+  default, `medium`, `low`) and `enable_thinking=false` to skip thinking.
+
+## Benchmarks
+
+Scores are for the full-precision weights; the GGUF files here are 4-bit.
+
+| Benchmark | Zen6 Coder | Claude-Opus-4.6 (Max) | DeepSeek-V4-Flash-0731 | Zen 5.8 |
 | :--- | :---: | :---: | :---: | :---: |
-| **SWE-bench Pro** | **62.5%** | 53.4% | 56.0% | 61.7% |
-| **DeepSWE 1.1** | **58.7%** | — | 54.4% | 42.2% |
-| **SWE-bench Multilingual** | **81.0%** | 77.5% | — | 73.8% |
-| **LiveCodeBench v6** | **91.9%** | 88.8% | 90.6% | 90.3% |
-| **NL2Repo-Bench** | **48.1%** | 47.6% | 54.2% | 42.3% |
-| **GPQA Diamond** | **91.7%** | 91.3% | 90.8% | 89.2% |
-| **Toolathlon Verified (Pass@1)** | **73.5%** | — | 70.3% | 67.1% |
-| **CoWorkBench** | **73.9%** | 68.2% | 45.1% | 70.7% |
+| SWE-bench Pro | 62.5% | 53.4% | 56.0% | 61.7% |
+| DeepSWE 1.1 | 58.7% | — | 54.4% | 42.2% |
+| SWE-bench Multilingual | 81.0% | 77.5% | — | 73.8% |
+| LiveCodeBench v6 | 91.9% | 88.8% | 90.6% | 90.3% |
+| NL2Repo-Bench | 48.1% | 47.6% | 54.2% | 42.3% |
+| GPQA Diamond | 91.7% | 91.3% | 90.8% | 89.2% |
+| Toolathlon Verified (Pass@1) | 73.5% | — | 70.3% | 67.1% |
+| CoWorkBench | 73.9% | 68.2% | 45.1% | 70.7% |
 
----
+## Speed on AMD Strix Halo
 
-## Model Weights & Formats
+Radeon 8060S, 128 GB unified memory. Measured with the Halogen engine's
+resumable prompt-state cache; speedup is a warm resume over a cold prefill of
+the same context.
 
-This repository distributes Zen6 Coder in two primary formats:
+| Context | Cold prefill | Warm-resume speedup |
+| :---: | :---: | :---: |
+| 512 tokens | 454.4 tok/s | 7.89x |
+| 2,048 tokens | 959.1 tok/s | 14.08x |
+| 8,192 tokens | 1,298.4 tok/s | 36.31x |
+| 16,384 tokens | 1,373.4 tok/s | 60.47x |
+| 32,768 tokens | 1,451.8 tok/s | 79.45x |
 
-### 1. Unsloth Dynamic GGUF (`UD-IQ4_XS`) + MTP
-- **`UD-IQ4_XS/Qwen3.8-Flash-Next-UD-IQ4_XS-00001-of-00003.gguf`** (10.9 MB)
-- **`UD-IQ4_XS/Qwen3.8-Flash-Next-UD-IQ4_XS-00002-of-00003.gguf`** (49.8 GB)
-- **`UD-IQ4_XS/Qwen3.8-Flash-Next-UD-IQ4_XS-00003-of-00003.gguf`** (43.8 GB)
-- **`MTP/mtp-Qwen3.8-Flash-Next-Q8_0.gguf`** (Dedicated 4B MTP draft head)
+## Files
 
-### 2. Halogen W4B Format (AMD Strix Halo Native)
-Optimized for AMD Ryzen AI Max+ 395 / Radeon 8060S (gfx1151) with ROCm and Halogen resumable prompt-state caching.
+| Path | Contents | Size |
+| :--- | :--- | :---: |
+| `UD-IQ4_XS/` | 4-bit IQ4_XS GGUF, 3 shards | 93.7 GB |
+| `MTP/` | MTP draft head, Q8_0 GGUF | 4.14 GB |
 
----
-
-## Hardware Benchmarks
-
-### AMD Strix Halo (8060S / 128GB Unified Memory)
-| Context Length | Cold Prefill | Halogen Warm Resume | Speedup |
-| :---: | :---: | :---: | :---: |
-| **512 tokens** | 454.4 tok/s | **0.1 ms** | **7.89x** |
-| **2,048 tokens** | 959.1 tok/s | **0.1 ms** | **14.08x** |
-| **8,192 tokens** | 1,298.4 tok/s | **0.1 ms** | **36.31x** |
-| **16,384 tokens** | 1,373.4 tok/s | **0.1 ms** | **60.47x** |
-| **32,768 tokens** | 1,451.8 tok/s | **0.1 ms** | **79.45x** |
-
----
-
-## Serving Instructions
-
-### Option A: AMD Strix Halo (Halogen Engine)
 ```bash
-sudo podman run -d --name halogen --device=/dev/kfd --device=/dev/dri \
-  -v /models:/models -p 8731:8731 halogen:latest \
-  --model /models/qwen38-flash-next-w4b.hgn \
-  --port 8731 --max-tokens-cap 65536
+hf download zenlm/zen6-coder --local-dir zen6-coder
 ```
 
-### Option B: Cross-Platform Llama.cpp with MTP Speculative Decoding
+## Run it
+
+### Hanzo API
+
+```bash
+curl https://api.hanzo.ai/v1/chat/completions \
+  -H "Authorization: Bearer $HANZO_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"zen6-coder","messages":[{"role":"user","content":"Hello!"}]}'
+```
+
+### llama.cpp with MTP
+
 ```bash
 llama-server \
-  -m UD-IQ4_XS/Qwen3.8-Flash-Next-UD-IQ4_XS-00001-of-00003.gguf \
-  --draft-model MTP/mtp-Qwen3.8-Flash-Next-Q8_0.gguf \
-  --draft-max 3 \
-  -c 262144 \
-  --port 8000
+  -m zen6-coder/UD-IQ4_XS/*-00001-of-00003.gguf \
+  -md zen6-coder/MTP/*.gguf \
+  --spec-type draft-mtp --spec-draft-n-max 2 \
+  -c 262144 --port 8000
 ```
 
-### Option C: Pure-Rust `hanzo-engine`
+MTP drafting for this architecture needs a llama.cpp build that includes
+[ggml-org/llama.cpp#28243](https://github.com/ggml-org/llama.cpp/pull/28243).
+On other builds, drop `-md` and `--spec-type`; the model runs without drafting.
+Drafting helps a single stream; skip it for concurrent serving.
+
+### hanzo-engine
+
 ```bash
-hanzo-engine serve \
-  --model zenlm/zen6-coder \
-  --format gguf \
-  --mtp MTP/mtp-Qwen3.8-Flash-Next-Q8_0.gguf \
-  --context-window 262144 \
-  --port 8000
+hanzo-engine serve -p 8000 --format gguf -m zen6-coder \
+  -f "$(cd zen6-coder && echo UD-IQ4_XS/*.gguf | tr ' ' ';')"
 ```
 
 ---
@@ -137,3 +154,9 @@ hanzo-engine serve \
   publisher={Zen LM / Hanzo AI}
 }
 ```
+
+## License & attribution
+
+The weights are a derivative of a model released under the Qwen Community
+License 1.0. Copyright (c) 2026 Qwen. The full license and permission notice:
+<https://huggingface.co/Qwen/Qwen3.8-Flash-Next/blob/main/LICENSE>.
